@@ -1,0 +1,11 @@
+[project]
+name = "jira-server"
+version = "0.1.0"
+description = "MCP server for Jira Cloud REST API v3 - create, read, and search issues"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.26.0",
+    "httpx>=0.25.0",
+    "pydantic>=2.0.0"
+]
