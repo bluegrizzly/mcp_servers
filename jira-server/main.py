@@ -130,13 +130,23 @@ async def jira_get_issue(
     """
     Get a single Jira issue by key.
     Optionally limit returned fields with the 'fields' parameter.
+    Returns the issue with title (summary) at the top level for easy access.
     """
     params = {}
     if fields:
         params["fields"] = fields
     path = f"/rest/api/3/issue/{issue_key}"
     data = await _request("GET", path, params=params if params else None)
-    return {"success": True, "issue": data}
+    # Extract title (summary) from fields for easy access
+    title = ""
+    if "fields" in data and isinstance(data["fields"], dict):
+        title = data["fields"].get("summary", "")
+    return {
+        "success": True,
+        "key": data.get("key", issue_key),
+        "title": title,
+        "issue": data,
+    }
 
 
 @mcp.tool()
@@ -153,18 +163,26 @@ async def jira_search_issues(
     Search for issues using JQL.
     Use jql for filters (project, status, assignee, text, etc.). Paginate with start_at and max_results.
     """
-    params = {"jql": jql, "maxResults": max_results, "startAt": start_at}
+    # Use the new /search/jql endpoint (POST) - the old /search endpoint was removed
+    # New API uses nextPageToken for pagination, not startAt. For first page, omit nextPageToken.
+    body: dict[str, Any] = {"jql": jql, "maxResults": max_results}
+    # Convert fields to array format (required by API)
     if fields:
-        params["fields"] = fields
+        field_list = fields.split(",") if isinstance(fields, str) else fields
+        body["fields"] = [f.strip() for f in field_list]
     else:
-        params["fields"] = DEFAULT_SEARCH_FIELDS
-    data = await _request("GET", "/rest/api/3/search", params=params)
+        body["fields"] = [f.strip() for f in DEFAULT_SEARCH_FIELDS.split(",")]
+    # Note: start_at is ignored for now; new API uses nextPageToken from response for pagination
+    data = await _request("POST", "/rest/api/3/search/jql", json=body)
+    # Response format: { "issues": [...], "isLast": true } (no "total" in new API)
+    issues = data.get("issues", [])
     return {
         "success": True,
-        "total": data.get("total", 0),
-        "startAt": data.get("startAt", 0),
-        "maxResults": data.get("maxResults", 0),
-        "issues": data.get("issues", []),
+        "total": len(issues),  # New API doesn't return total; use count of returned issues
+        "startAt": start_at,
+        "maxResults": max_results,
+        "isLast": data.get("isLast", True),
+        "issues": issues,
     }
 
 
@@ -208,10 +226,15 @@ async def jira_issues_report(
         q = f"project = {project_key}"
     else:
         raise ValueError("Provide either project_key or jql")
-    params = {"jql": q, "maxResults": max_results, "startAt": 0, "fields": "summary,status,issuetype,created,updated"}
-    data = await _request("GET", "/rest/api/3/search", params=params)
+    # Use the new /search/jql endpoint (POST) - the old /search endpoint was removed
+    body = {
+        "jql": q,
+        "maxResults": max_results,
+        "fields": ["summary", "status", "issuetype", "created", "updated"],
+    }
+    data = await _request("POST", "/rest/api/3/search/jql", json=body)
     issues = data.get("issues", [])
-    total = data.get("total", 0)
+    total = len(issues)  # New API doesn't return total; use count of returned issues
     by_status: dict[str, int] = {}
     rows = []
     for i in issues:
